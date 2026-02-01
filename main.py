@@ -7,22 +7,40 @@ import tkinter as tk
 from tkinter import ttk
 import pystray
 from PIL import Image, ImageDraw
-import keyboard
+import time
+import win32api
+import win32gui
+import win32con
+from pynput import keyboard
 
 class TodoManager:
     def __init__(self):
         self.config_path = Path.home() / ".minimal_todo.json"
+        is_new = not self.config_path.exists()
         data = self.load_data()
         self.todos = data.get("todos", [])
         self.notes = data.get("notes", [])
         self.marks = data.get("marks", [])
+        self.settings = data.get("settings", self.get_default_settings())
+
+        if is_new:
+            self.add_todo("Type 'settings' to configure QuickLog")
+
+    def get_default_settings(self):
+        return {
+            "modes": {
+                "todo": {"enabled": True, "password": False},
+                "note": {"enabled": True, "password": False},
+                "mark": {"enabled": True, "password": True}
+            }
+        }
 
     def load_data(self):
         if self.config_path.exists():
             try:
                 # If file exists but is empty, it might be mid-corruption
                 if self.config_path.stat().st_size == 0:
-                    return {"todos": [], "notes": [], "marks": []}
+                    return {"todos": [], "notes": [], "marks": [], "settings": self.get_default_settings()}
 
                 with open(self.config_path, "r", encoding='utf-8') as f:
                     data = json.load(f)
@@ -32,14 +50,17 @@ class TodoManager:
                         todos = data
                         notes = []
                         marks = []
+                        settings = self.get_default_settings()
                     elif isinstance(data, dict):
                         todos = data.get("todos", [])
                         notes = data.get("notes", [])
                         marks = data.get("marks", [])
+                        settings = data.get("settings", self.get_default_settings())
                     else:
                         todos = []
                         notes = []
                         marks = []
+                        settings = self.get_default_settings()
 
                     # Migration: ensure every todo has a 'done' key
                     changed = False
@@ -49,9 +70,9 @@ class TodoManager:
                             changed = True
                     
                     if changed:
-                        self.save_data_raw(todos, notes, marks)
+                        self.save_data_raw(todos, notes, marks, settings)
                     
-                    return {"todos": todos, "notes": notes, "marks": marks}
+                    return {"todos": todos, "notes": notes, "marks": marks, "settings": settings}
             except (json.JSONDecodeError, Exception) as e:
                 # If corruption is detected, we don't overwrite immediately
                 # We could log this or create a backup of the corrupted file
@@ -63,15 +84,20 @@ class TodoManager:
                         shutil.copy2(self.config_path, backup_path)
                 except:
                     pass
-                return {"todos": [], "notes": [], "marks": []}
-        return {"todos": [], "notes": [], "marks": []}
+                return {"todos": [], "notes": [], "marks": [], "settings": self.get_default_settings()}
+        return {"todos": [], "notes": [], "marks": [], "settings": self.get_default_settings()}
 
-    def save_data_raw(self, todos, notes, marks):
+    def save_data_raw(self, todos, notes, marks, settings):
         # Atomic write: Save to temp file then replace
         temp_path = self.config_path.with_suffix(".json.tmp")
         try:
             with open(temp_path, "w", encoding='utf-8') as f:
-                json.dump({"todos": todos, "notes": notes, "marks": marks}, f, ensure_ascii=False)
+                json.dump({
+                    "todos": todos, 
+                    "notes": notes, 
+                    "marks": marks,
+                    "settings": settings
+                }, f, ensure_ascii=False)
             
             # os.replace is atomic on both Windows and POSIX
             os.replace(temp_path, self.config_path)
@@ -84,7 +110,7 @@ class TodoManager:
                     pass
 
     def save_data(self):
-        self.save_data_raw(self.todos, self.notes, self.marks)
+        self.save_data_raw(self.todos, self.notes, self.marks, self.settings)
 
     def add_todo(self, text):
         if text and text.strip():
@@ -307,12 +333,86 @@ class TaskDialog(tk.Toplevel):
             self.callback(text)
         self.destroy()
 
+class SettingsDialog(tk.Toplevel):
+    """A minimalist settings window."""
+    def __init__(self, parent, manager, on_save):
+        super().__init__(parent)
+        self.manager = manager
+        self.on_save = on_save
+        
+        self.title("QuickLog Settings")
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.attributes("-alpha", 0.95)
+        
+        bg_color = "#1e1e1e"
+        fg_color = "white"
+        self.configure(bg=bg_color)
+        
+        # Center on screen
+        width, height = 300, 350
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        x = (screen_width // 2) - (width // 2)
+        y = (screen_height // 2) - (height // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Title Label
+        tk.Label(self, text="QUICKLOG SETTINGS", font=("Segoe UI Variable Display", 12, "bold"),
+                 bg=bg_color, fg="#eab308").pack(pady=(20, 10))
+        
+        self.vars = {}
+        
+        # Mode Settings
+        for mode in ["todo", "note", "mark"]:
+            frame = tk.Frame(self, bg=bg_color)
+            frame.pack(fill="x", padx=30, pady=5)
+            
+            # Enabled Checkbox
+            enabled_var = tk.BooleanVar(value=self.manager.settings["modes"][mode]["enabled"])
+            self.vars[f"{mode}_enabled"] = enabled_var
+            tk.Checkbutton(frame, text=f"Enable {mode.capitalize()}", variable=enabled_var,
+                           bg=bg_color, fg=fg_color, selectcolor=bg_color,
+                           activebackground=bg_color, activeforeground=fg_color,
+                           font=("Segoe UI Variable Display", 10)).pack(side="left")
+            
+            # Password Toggle
+            pass_var = tk.BooleanVar(value=self.manager.settings["modes"][mode]["password"])
+            self.vars[f"{mode}_password"] = pass_var
+            tk.Checkbutton(frame, text="*", variable=pass_var,
+                           bg=bg_color, fg="#888888", selectcolor=bg_color,
+                           activebackground=bg_color, activeforeground=fg_color,
+                           font=("Segoe UI Variable Display", 10)).pack(side="right")
+
+        # Save Button
+        save_btn = tk.Button(self, text="SAVE", font=("Segoe UI Variable Display", 10, "bold"),
+                            bg="#eab308", fg="black", activebackground="#ca8a04",
+                            bd=0, padx=20, pady=5, command=self.save)
+        save_btn.pack(pady=20)
+        
+        # Close on Escape
+        self.bind("<Escape>", lambda e: self.destroy())
+        
+        # Focus handling
+        self.focus_force()
+
+    def save(self):
+        for mode in ["todo", "note", "mark"]:
+            self.manager.settings["modes"][mode]["enabled"] = self.vars[f"{mode}_enabled"].get()
+            self.manager.settings["modes"][mode]["password"] = self.vars[f"{mode}_password"].get()
+        
+        self.manager.save_data()
+        self.on_save()
+        self.destroy()
+
 class TrayApp:
     def __init__(self):
         self.manager = TodoManager()
         self.icon = None
         self.mode = "todo"  # "todo", "note", or "mark"
         self.current_dialog = None
+        self.hotkey_listener = None
+        self.last_wake_check = time.time()
         
         # Create a hidden root window to handle the main event loop
         self.root = tk.Tk()
@@ -349,12 +449,16 @@ class TrayApp:
         return image
 
     def toggle_mode(self):
-        if self.mode == "todo":
-            self.mode = "note"
-        elif self.mode == "note":
-            self.mode = "mark"
-        else:
-            self.mode = "todo"
+        modes = ["todo", "note", "mark"]
+        current_idx = modes.index(self.mode)
+        
+        # Try to find the next enabled mode
+        for i in range(1, 4):
+            next_mode = modes[(current_idx + i) % 3]
+            if self.manager.settings["modes"][next_mode]["enabled"]:
+                self.mode = next_mode
+                break
+        
         self.update_menu()
 
     def add_item_ui(self):
@@ -367,12 +471,15 @@ class TrayApp:
             except tk.TclError:
                 self.current_dialog = None
 
+        mode_settings = self.manager.settings["modes"].get(self.mode, {"enabled": True, "password": False})
+        is_pw = mode_settings.get("password", False)
+
         if self.mode == "todo":
-            title, prompt, is_pw = "New Task", "What needs to be done?", False
+            title, prompt = "New Task", "What needs to be done?"
         elif self.mode == "note":
-            title, prompt, is_pw = "New Note", "Enter your note:", False
+            title, prompt = "New Note", "Enter your note:"
         else: # mark mode
-            title, prompt, is_pw = "Add", "Enter text:", True
+            title, prompt = "Add", "Enter text:"
             
         def clear_current_dialog():
             self.current_dialog = None
@@ -381,12 +488,25 @@ class TrayApp:
         self.current_dialog.focus_force()  # Initial attempt to grab focus immediately
 
     def on_item_added(self, text):
+        if text.lower().strip() == "settings":
+            self.show_settings_ui()
+            return
+
         if self.mode == "todo":
             self.manager.add_todo(text)
         elif self.mode == "note":
             self.manager.add_note(text)
         else:
             self.manager.add_mark(text)
+        self.update_menu()
+
+    def show_settings_ui(self):
+        SettingsDialog(self.root, self.manager, on_save=self.on_settings_saved)
+
+    def on_settings_saved(self):
+        # Ensure current mode is still enabled
+        if not self.manager.settings["modes"][self.mode]["enabled"]:
+            self.toggle_mode()
         self.update_menu()
 
     def on_clear_completed(self):
@@ -494,22 +614,49 @@ class TrayApp:
             all_completed = all(t['done'] for t in self.manager.todos)
 
         # Register global hotkeys
-        try:
-            # We use suppress=True to prevent the character from being typed into other apps
-            # and to stop it from interfering with our new window's focus
-            keyboard.add_hotkey('|', lambda: self.root.after(0, self.add_item_ui), suppress=True)
-            keyboard.add_hotkey('alt+|', lambda: self.root.after(0, self.toggle_mode), suppress=True)
-        except Exception as e:
-            print(f"Error registering hotkeys: {e}")
+        self.register_hotkeys()
 
         self.icon = pystray.Icon("quick_log", self.create_image(all_completed), "Quick Log")
         self.update_menu()
         self.icon.run()
 
+    def register_hotkeys(self):
+        if self.hotkey_listener:
+            try:
+                self.hotkey_listener.stop()
+            except:
+                pass
+        
+        try:
+            # pynput hotkeys
+            self.hotkey_listener = keyboard.GlobalHotKeys({
+                '<alt>+|': lambda: self.root.after(0, self.add_item_ui),
+                '<ctrl>+|': lambda: self.root.after(0, self.toggle_mode)
+            })
+            self.hotkey_listener.start()
+            print("Hotkeys registered successfully")
+        except Exception as e:
+            print(f"Error registering hotkeys: {e}")
+
+    def check_sleep_wake(self):
+        """Watchdog to detect system sleep/wake by checking for time jumps."""
+        current_time = time.time()
+        # If more than 10 seconds have passed since the last check (and we poll every 5s),
+        # it's likely the system was asleep.
+        if current_time - self.last_wake_check > 10:
+            print("System wake detected, re-registering hotkeys...")
+            self.register_hotkeys()
+        
+        self.last_wake_check = current_time
+        self.root.after(5000, self.check_sleep_wake)
+
     def run(self):
         # Start pystray in a separate thread
         tray_thread = threading.Thread(target=self.run_tray, daemon=True)
         tray_thread.start()
+        
+        # Start sleep/wake watchdog
+        self.root.after(5000, self.check_sleep_wake)
         
         # Run Tkinter main loop in the main thread
         self.root.mainloop()

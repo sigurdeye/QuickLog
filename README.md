@@ -1,34 +1,54 @@
-# Quick Log
+# QuickLog
 
-Minimalist tray app for taking notes fast. Built for teachers who need a discreet way to log behavior and marks during class.
+A dead-simple, minimalist capture tool for your Windows system tray. QuickLog stays out of your way until you need to jot something down, log a thought, or track a quick task.
 
-## What it does
-Three modes you can cycle through:
-- **Todo**: Basic checkbox list. Icon is yellow when you have tasks, and turns green when all tasks are done.
-- **Notes**: Standard text notes for quick reminders.
-- **Marks (stealthed)**: This is the hidden mode. It uses password-style input so students can't see the text of what you are writing. Logs are also hidden in a submenu. Perfect for logging behavior marks while the projector is on.
+## Features
 
-## Controls
-- **Left click tray**: Toggle between modes.
-- **Right click tray**: See your logs / add new stuff.
-- **| (pipe key)**: Open the floating input bar instantly.
-- **Alt + |**: Switch to next mode.
-- **Enter**: Save.
-- **Esc / Click away**: Cancel.
+- **Minimalist UI**: A "glassy" dark-themed input bar that appears only when you need it.
+- **Three Modes**:
+  - **Todo**: Quick task tracking.
+  - **Note**: Fast text capture with one-click copy.
+  - **Log (Mark)**: Timestamped entries for logging your day.
+- **Zero Distraction**: No buttons, no menus, no noise. Just your thoughts.
+- **Hidden Settings**: Type `settings` in the input bar to unlock customization.
+- **Global Hotkeys**: Custom system-wide shortcuts.
+- **Sleep-Aware**: Automatically re-registers hotkeys after your laptop wakes up.
 
-## How to get it
-Choose one of these two options:
+## Hotkeys (Default)
 
-### Option A: Use the release
-Go to the releases page and download `QuickLog.exe`. This is the easiest way.
+- **Alt + |**: Open the floating input bar instantly.
+- **Ctrl + |**: Switch between modes (Todo, Note, Log).
+- **Escape**: Close the input bar without saving.
 
-### Option B: Build it yourself
-- Install `uv`.
-- Run `uv sync`.
-- Run `uv run pyinstaller --noconsole --onefile --name "QuickLog" main.py`.
-- Find your file in `dist/QuickLog.exe`.
+## Configuration
 
-## Add to startup
-To make it start when your computer turns on:
-- Run `setup_startup.bat` (it will create a shortcut in your windows startup folder).
-- Or just manually put a shortcut of the exe in `shell:startup`.
+Type `settings` (case-insensitive) into the input bar to open the configuration menu. Here you can:
+- Enable/Disable specific modes.
+- Toggle "Password Mode" (asterisks) for any mode to keep your inputs private.
+
+## Installation & Setup
+
+### For Users
+1. Download `QuickLog.exe` from the [Releases](https://github.com/sigurdeye/QuickLog/releases) page.
+2. Run the executable. It will appear in your system tray.
+
+### For Developers (using `uv`)
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/sigurdeye/QuickLog.git
+   cd QuickLog
+   ```
+2. Install dependencies and run:
+   ```bash
+   uv sync
+   uv run python main.py
+   ```
+
+## Building from source
+To create your own standalone executable:
+```bash
+uv run pyinstaller QuickLog.spec --noconfirm
+```
+
+## License
+MIT
