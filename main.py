@@ -15,16 +15,22 @@ from pynput import keyboard
 
 class TodoManager:
     def __init__(self):
-        self.config_path = Path.home() / ".minimal_todo.json"
-        is_new = not self.config_path.exists()
+        self.config_path = Path.home() / ".quicklog.json"
+        
+        # Migration: check for old config file
+        old_config = Path.home() / ".minimal_todo.json"
+        if old_config.exists() and not self.config_path.exists():
+            try:
+                import shutil
+                shutil.copy2(old_config, self.config_path)
+            except:
+                pass
+
         data = self.load_data()
         self.todos = data.get("todos", [])
         self.notes = data.get("notes", [])
         self.marks = data.get("marks", [])
         self.settings = data.get("settings", self.get_default_settings())
-
-        if is_new:
-            self.add_todo("Type 'settings' to configure QuickLog")
 
     def get_default_settings(self):
         return {
@@ -32,6 +38,10 @@ class TodoManager:
                 "todo": {"enabled": True, "password": False},
                 "note": {"enabled": True, "password": False},
                 "mark": {"enabled": True, "password": True}
+            },
+            "shortcuts": {
+                "open_bar": "<alt>+q",
+                "cycle_mode": "<ctrl>+q"
             }
         }
 
@@ -164,8 +174,9 @@ class TodoManager:
 
 class TaskDialog(tk.Toplevel):
     """A frameless, minimalist floating input dialog."""
-    def __init__(self, parent, callback, on_close=None, title="New Item", prompt="...", is_password=False):
-        super().__init__(parent)
+    def __init__(self, parent_app, callback, on_close=None, title="New Item", prompt="...", is_password=False):
+        super().__init__(parent_app.root)
+        self.parent = parent_app
         self.callback = callback
         self.on_close = on_close
         self.prompt = prompt
@@ -175,9 +186,9 @@ class TaskDialog(tk.Toplevel):
         self.overrideredirect(True)
         
         # Modern Dark "Glass" Styling
-        bg_color = "#1e1e1e"
+        bg_color = "#121212"
         self.configure(bg=bg_color)
-        self.attributes("-alpha", 0.95)  # Semi-transparent
+        self.attributes("-alpha", 0.98)
         self.attributes("-topmost", True)
         
         # Dimensions
@@ -191,7 +202,7 @@ class TaskDialog(tk.Toplevel):
         y = (screen_height // 2) - (height // 2)
         self.geometry(f"+{x}+{y}")
 
-        # The Entry Field (No border, minimalist)
+        # The Entry Field
         self.entry = tk.Entry(self, font=("Segoe UI Variable Display", 14), 
                               bg=bg_color, fg="white", 
                               insertbackground="white", 
@@ -200,210 +211,118 @@ class TaskDialog(tk.Toplevel):
                               justify="center")
         self.entry.pack(expand=True, fill="both", padx=20)
         
-        # Placeholder/Prompt logic (Improved to avoid flicker)
-        # We don't insert it immediately because we expect to gain focus.
-        # If focus fails or is lost, we'll add it then.
         self.entry.bind("<FocusIn>", self._clear_placeholder)
         self.after(200, self._add_placeholder)
 
         # Bindings
         self.bind("<Return>", lambda e: self.submit())
         self.bind("<Escape>", lambda e: self.destroy())
+        self.bind("<Button-3>", self._show_context_menu) # Right click
         
-        # Debounced closure to prevent accidental closure on creation
+        # Debounced closure
         self.ready_to_close = False
         self.after(500, self._set_ready_and_start_monitor)
         self.bind("<FocusOut>", self._on_focus_out)
-        
-        # Initial focus and grab
         self.after(10, self._force_focus)
+
+    def _show_context_menu(self, event):
+        # Create a standard old-school gray menu
+        menu = tk.Menu(self, tearoff=0, bg="#f0f0f0", fg="black")
+        
+        def toggle(m, s):
+            self.parent.manager.settings["modes"][m][s] = not self.parent.manager.settings["modes"][m][s]
+            # Ensure at least one enabled
+            if s == "enabled" and not any(self.parent.manager.settings["modes"][mi]["enabled"] for mi in ["todo", "note", "mark"]):
+                self.parent.manager.settings["modes"][m]["enabled"] = True
+            self.parent.manager.save_data()
+            self.parent.on_settings_saved()
+
+        for mode in ["todo", "note", "mark"]:
+            mode_menu = tk.Menu(menu, tearoff=0)
+            is_enabled = self.parent.manager.settings["modes"][mode]["enabled"]
+            is_masked = self.parent.manager.settings["modes"][mode]["password"]
+            
+            mode_menu.add_checkbutton(label="Enable", 
+                                      command=lambda m=mode: toggle(m, "enabled"),
+                                      variable=tk.BooleanVar(value=is_enabled))
+            mode_menu.add_checkbutton(label="Mask Input", 
+                                      command=lambda m=mode: toggle(m, "password"),
+                                      variable=tk.BooleanVar(value=is_masked))
+            menu.add_cascade(label=f"{mode.capitalize()} Mode", menu=mode_menu)
+
+        menu.add_separator()
+        startup_text = "Remove from Startup" if self.parent.is_startup_enabled() else "Run at Startup"
+        menu.add_command(label=startup_text, 
+                         command=lambda: self.parent.set_startup(not self.parent.is_startup_enabled()))
+        
+        menu.post(event.x_root, event.y_root)
 
     def _set_ready_and_start_monitor(self):
         self.ready_to_close = True
         self._poll_focus()
 
     def _on_focus_out(self, event):
-        # We still use the event as a trigger, but with a "smart" check
         if self.ready_to_close:
             self.after(100, self._check_focus_and_close)
 
     def _poll_focus(self):
-        """Smart polling monitor for focus loss."""
         if self.winfo_exists() and self.ready_to_close:
             self._check_focus_and_close()
             self.after(500, self._poll_focus)
 
     def _check_focus_and_close(self):
-        """The 'smart' check: verifies if focus is truly outside our process."""
-        if not self.winfo_exists():
-            return
-            
+        if not self.winfo_exists(): return
         try:
             import ctypes
             import os
-            # Get the HWND of the window that currently has focus
             foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
-            
-            # If no window has focus, or it's us, we stay open
-            if foreground_hwnd == 0:
-                return
-                
-            # Get our own HWND
+            if foreground_hwnd == 0: return
             my_hwnd = self.winfo_id()
-            if foreground_hwnd == my_hwnd:
-                return
-                
-            # If it's not us, check if it's one of our own process's windows
-            # (e.g. if we had multiple dialogs or a root window visible)
+            if foreground_hwnd == my_hwnd: return
             lp_pid = ctypes.c_ulong()
             ctypes.windll.user32.GetWindowThreadProcessId(foreground_hwnd, ctypes.byref(lp_pid))
-            
             if lp_pid.value != os.getpid():
                 self.destroy()
-        except Exception:
-            # Fallback for unexpected errors
-            if self.focus_get() is None:
-                self.destroy()
+        except:
+            if self.focus_get() is None: self.destroy()
 
     def _force_focus(self):
         self.attributes("-topmost", True)
         self.focus_force()
         self.lift()
         self.entry.focus_set()
-        
-        # Direct Windows API call to steal foreground focus
         try:
             import ctypes
-            # Get the window handle (HWND)
             hwnd = self.winfo_id()
-            
-            # SWP_NOSIZE (1) | SWP_NOMOVE (2) | SWP_SHOWWINDOW (64) = 67
-            # HWND_TOPMOST = -1
             ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 67)
-            
-            # Try to bring to front using multiple methods
-            ctypes.windll.user32.ShowWindow(hwnd, 5) # SW_SHOW
+            ctypes.windll.user32.ShowWindow(hwnd, 5)
             ctypes.windll.user32.SetForegroundWindow(hwnd)
-            ctypes.windll.user32.SetActiveWindow(hwnd)
-            
-            # Additional trick: attach to the foreground window thread
-            # to gain permission to SetForegroundWindow
-            curr_thread = ctypes.windll.kernel32.GetCurrentThreadId()
-            fore_window = ctypes.windll.user32.GetForegroundWindow()
-            if fore_window != 0:
-                fore_thread = ctypes.windll.user32.GetWindowThreadProcessId(fore_window, None)
-                if curr_thread != fore_thread:
-                    ctypes.windll.user32.AttachThreadInput(fore_thread, curr_thread, True)
-                    ctypes.windll.user32.SetForegroundWindow(hwnd)
-                    ctypes.windll.user32.AttachThreadInput(fore_thread, curr_thread, False)
-            
-            # Final attempt to ensure focus lands on the Entry specifically
-            self.entry.focus_set()
-        except Exception as e:
-            print(f"Focus error: {e}")
-
-        # Repeated focus attempts for stubborn windows
-        self.after(50, lambda: self.focus_force())
+        except: pass
         self.after(50, lambda: self.entry.focus_set())
-        self.after(150, lambda: self.entry.focus_set())
 
     def _clear_placeholder(self, event=None):
         if self.entry.get() == self.prompt:
             self.entry.delete(0, tk.END)
             self.entry.config(fg="white")
-            if self.is_password:
-                self.entry.config(show="*")
+            if self.is_password: self.entry.config(show="*")
 
     def _add_placeholder(self, event=None):
         if self.winfo_exists() and not self.entry.get() and self.focus_get() != self.entry:
-            self.entry.config(fg="#888888")
-            if self.is_password:
-                self.entry.config(show="") # Show prompt text unmasked
+            self.entry.config(fg="#666666")
+            if self.is_password: self.entry.config(show="")
             self.entry.insert(0, self.prompt)
 
     def destroy(self):
-        if self.on_close:
-            self.on_close()
+        if self.on_close: self.on_close()
         super().destroy()
 
     def submit(self):
         text = self.entry.get()
-        # Don't submit if it's just the placeholder
-        if text.strip() and text not in ["What needs to be done?", "Enter your note:", "Enter text:"]:
+        if text.strip() and text not in [self.prompt]:
             self.callback(text)
         self.destroy()
 
-class SettingsDialog(tk.Toplevel):
-    """A minimalist settings window."""
-    def __init__(self, parent, manager, on_save):
-        super().__init__(parent)
-        self.manager = manager
-        self.on_save = on_save
-        
-        self.title("QuickLog Settings")
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-        self.attributes("-alpha", 0.95)
-        
-        bg_color = "#1e1e1e"
-        fg_color = "white"
-        self.configure(bg=bg_color)
-        
-        # Center on screen
-        width, height = 300, 350
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        x = (screen_width // 2) - (width // 2)
-        y = (screen_height // 2) - (height // 2)
-        self.geometry(f"{width}x{height}+{x}+{y}")
-        
-        # Title Label
-        tk.Label(self, text="QUICKLOG SETTINGS", font=("Segoe UI Variable Display", 12, "bold"),
-                 bg=bg_color, fg="#eab308").pack(pady=(20, 10))
-        
-        self.vars = {}
-        
-        # Mode Settings
-        for mode in ["todo", "note", "mark"]:
-            frame = tk.Frame(self, bg=bg_color)
-            frame.pack(fill="x", padx=30, pady=5)
-            
-            # Enabled Checkbox
-            enabled_var = tk.BooleanVar(value=self.manager.settings["modes"][mode]["enabled"])
-            self.vars[f"{mode}_enabled"] = enabled_var
-            tk.Checkbutton(frame, text=f"Enable {mode.capitalize()}", variable=enabled_var,
-                           bg=bg_color, fg=fg_color, selectcolor=bg_color,
-                           activebackground=bg_color, activeforeground=fg_color,
-                           font=("Segoe UI Variable Display", 10)).pack(side="left")
-            
-            # Password Toggle
-            pass_var = tk.BooleanVar(value=self.manager.settings["modes"][mode]["password"])
-            self.vars[f"{mode}_password"] = pass_var
-            tk.Checkbutton(frame, text="*", variable=pass_var,
-                           bg=bg_color, fg="#888888", selectcolor=bg_color,
-                           activebackground=bg_color, activeforeground=fg_color,
-                           font=("Segoe UI Variable Display", 10)).pack(side="right")
-
-        # Save Button
-        save_btn = tk.Button(self, text="SAVE", font=("Segoe UI Variable Display", 10, "bold"),
-                            bg="#eab308", fg="black", activebackground="#ca8a04",
-                            bd=0, padx=20, pady=5, command=self.save)
-        save_btn.pack(pady=20)
-        
-        # Close on Escape
-        self.bind("<Escape>", lambda e: self.destroy())
-        
-        # Focus handling
-        self.focus_force()
-
-    def save(self):
-        for mode in ["todo", "note", "mark"]:
-            self.manager.settings["modes"][mode]["enabled"] = self.vars[f"{mode}_enabled"].get()
-            self.manager.settings["modes"][mode]["password"] = self.vars[f"{mode}_password"].get()
-        
-        self.manager.save_data()
-        self.on_save()
-        self.destroy()
+# SettingsDialog removed.
 
 class TrayApp:
     def __init__(self):
@@ -417,6 +336,12 @@ class TrayApp:
         # Create a hidden root window to handle the main event loop
         self.root = tk.Tk()
         self.root.withdraw()
+
+        if not (Path.home() / ".quicklog.json").exists() and not (Path.home() / ".minimal_todo.json").exists():
+            # First launch: add instructional todos
+            self.manager.add_todo("Press alt+Q to add a note")
+            self.manager.add_todo("Press ctrl+Q to switch mode")
+            self.manager.save_data()
         
     def create_image(self, all_completed=False):
         image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
@@ -484,14 +409,10 @@ class TrayApp:
         def clear_current_dialog():
             self.current_dialog = None
 
-        self.current_dialog = TaskDialog(self.root, self.on_item_added, on_close=clear_current_dialog, title=title, prompt=prompt, is_password=is_pw)
-        self.current_dialog.focus_force()  # Initial attempt to grab focus immediately
+        self.current_dialog = TaskDialog(self, self.on_item_added, on_close=clear_current_dialog, title=title, prompt=prompt, is_password=is_pw)
+        self.current_dialog.focus_force()
 
     def on_item_added(self, text):
-        if text.lower().strip() == "settings":
-            self.show_settings_ui()
-            return
-
         if self.mode == "todo":
             self.manager.add_todo(text)
         elif self.mode == "note":
@@ -500,13 +421,11 @@ class TrayApp:
             self.manager.add_mark(text)
         self.update_menu()
 
-    def show_settings_ui(self):
-        SettingsDialog(self.root, self.manager, on_save=self.on_settings_saved)
-
     def on_settings_saved(self):
         # Ensure current mode is still enabled
         if not self.manager.settings["modes"][self.mode]["enabled"]:
             self.toggle_mode()
+        self.register_hotkeys() # Apply new hotkeys immediately
         self.update_menu()
 
     def on_clear_completed(self):
@@ -535,18 +454,23 @@ class TrayApp:
             self.manager.toggle_todo(index)
             self.update_menu()
 
-        # Determine icon status for todo mode
+        def toggle_setting(mode, setting):
+            self.manager.settings["modes"][mode][setting] = not self.manager.settings["modes"][mode][setting]
+            # If disabling a mode, ensure at least one is enabled
+            if setting == "enabled" and not any(self.manager.settings["modes"][m]["enabled"] for m in ["todo", "note", "mark"]):
+                self.manager.settings["modes"][mode]["enabled"] = True
+            
+            self.manager.save_data()
+            self.on_settings_saved()
+
         all_completed = True
         if self.manager.todos:
             all_completed = all(t['done'] for t in self.manager.todos)
         
-        # Update icon image
         if self.icon:
             self.icon.icon = self.create_image(all_completed)
 
         menu_items = []
-        
-        # Left-click default action: Toggle Mode (Invisible)
         menu_items.append(pystray.MenuItem("Toggle Mode", self.toggle_mode, default=True, visible=False))
 
         if self.mode == "todo":
@@ -557,10 +481,8 @@ class TrayApp:
                     status = "✅" if todo['done'] else "⬜"
                     text = f"{status} {todo['text']}"
                     menu_items.append(pystray.MenuItem(text, (lambda idx=i: lambda: on_toggle_todo(idx))()))
-            
             menu_items.append(pystray.Menu.SEPARATOR)
             menu_items.append(pystray.MenuItem("➕ Add Task...", self.add_item_ui))
-            
             has_completed = any(t['done'] for t in self.manager.todos)
             if has_completed:
                 menu_items.append(pystray.MenuItem("🧹 Clear completed tasks", self.on_clear_completed))
@@ -575,29 +497,43 @@ class TrayApp:
                         pystray.MenuItem("🗑️ Delete", (lambda idx=i: lambda: self.on_delete_note(idx))())
                     )
                     menu_items.append(pystray.MenuItem(note, note_menu))
-            
             menu_items.append(pystray.Menu.SEPARATOR)
             menu_items.append(pystray.MenuItem("➕ Add Note...", self.add_item_ui))
         
         else: # mark mode
-            # In mark mode, the entries are hidden in a submenu called "Logs" or similar
             marks_items = []
             if not self.manager.marks:
                 marks_items.append(pystray.MenuItem("Empty", lambda: None, enabled=False))
             else:
                 for i, mark in enumerate(self.manager.marks):
-                    # Clicking a mark deletes it (as requested)
                     marks_items.append(pystray.MenuItem(mark, (lambda idx=i: lambda: self.on_delete_mark(idx))()))
-                
                 marks_items.append(pystray.Menu.SEPARATOR)
                 marks_items.append(pystray.MenuItem("CLEAR ALL", self.on_clear_marks))
-            
-            # The main menu for Mark Mode is very sparse
             menu_items.append(pystray.MenuItem("Logs", pystray.Menu(*marks_items)))
             menu_items.append(pystray.Menu.SEPARATOR)
-            menu_items.append(pystray.MenuItem("Add", self.add_item_ui))
+            menu_items.append(pystray.MenuItem("➕ Add", self.add_item_ui))
 
         menu_items.append(pystray.Menu.SEPARATOR)
+        
+        # --- Settings Submenu ---
+        def make_mode_menu(m):
+            return pystray.Menu(
+                pystray.MenuItem("Enable", lambda item: toggle_setting(m, "enabled"), 
+                                checked=lambda item: self.manager.settings["modes"][m]["enabled"]),
+                pystray.MenuItem("Mask Input", lambda item: toggle_setting(m, "password"), 
+                                checked=lambda item: self.manager.settings["modes"][m]["password"])
+            )
+
+        settings_menu = pystray.Menu(
+            pystray.MenuItem(lambda item: "Remove from startup" if self.is_startup_enabled() else "Run at startup", 
+                            lambda: self.set_startup(not self.is_startup_enabled())),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Todo Mode", make_mode_menu("todo")),
+            pystray.MenuItem("Note Mode", make_mode_menu("note")),
+            pystray.MenuItem("Log Mode", make_mode_menu("mark"))
+        )
+        
+        menu_items.append(pystray.MenuItem("⚙️ Settings", settings_menu))
         menu_items.append(pystray.MenuItem("Exit", self.quit_app))
         
         if self.icon:
@@ -627,16 +563,23 @@ class TrayApp:
             except:
                 pass
         
+        shortcuts = self.manager.settings.get("shortcuts", self.get_default_shortcuts())
+        open_bar_hk = shortcuts.get("open_bar", "<alt>+q")
+        cycle_mode_hk = shortcuts.get("cycle_mode", "<ctrl>+q")
+
         try:
             # pynput hotkeys
             self.hotkey_listener = keyboard.GlobalHotKeys({
-                '<alt>+|': lambda: self.root.after(0, self.add_item_ui),
-                '<ctrl>+|': lambda: self.root.after(0, self.toggle_mode)
+                open_bar_hk: lambda: self.root.after(0, self.add_item_ui),
+                cycle_mode_hk: lambda: self.root.after(0, self.toggle_mode)
             })
             self.hotkey_listener.start()
-            print("Hotkeys registered successfully")
+            print(f"Hotkeys registered: {open_bar_hk}, {cycle_mode_hk}")
         except Exception as e:
             print(f"Error registering hotkeys: {e}")
+
+    def get_default_shortcuts(self):
+        return {"open_bar": "<alt>+q", "cycle_mode": "<ctrl>+q"}
 
     def check_sleep_wake(self):
         """Watchdog to detect system sleep/wake by checking for time jumps."""
@@ -649,6 +592,50 @@ class TrayApp:
         
         self.last_wake_check = current_time
         self.root.after(5000, self.check_sleep_wake)
+
+    def is_startup_enabled(self):
+        startup_folder = Path(os.getenv("APPDATA")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        return (startup_folder / "QuickLog.vbs").exists()
+
+    def set_startup(self, enabled):
+        import sys
+        startup_folder = Path(os.getenv("APPDATA")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        vbs_path = startup_folder / "QuickLog.vbs"
+        
+        if enabled:
+            try:
+                exe_path = sys.executable
+                # Get the absolute path to either the EXE or the main.py script
+                if getattr(sys, 'frozen', False):
+                    # Running as PyInstaller EXE
+                    target = os.path.abspath(exe_path)
+                    vbs_content = (
+                        'Set WshShell = CreateObject("WScript.Shell")\n'
+                        f'WshShell.Run """{target}""", 0, False\n'
+                        'Set WshShell = Nothing'
+                    )
+                else:
+                    # Running from source (using current venv pythonw)
+                    pythonw = Path(sys.prefix) / "Scripts" / "pythonw.exe"
+                    main_py = os.path.abspath(__file__)
+                    vbs_content = (
+                        'Set WshShell = CreateObject("WScript.Shell")\n'
+                        f'WshShell.Run """{pythonw}"" ""{main_py}""", 0, False\n'
+                        'Set WshShell = Nothing'
+                    )
+                
+                with open(vbs_path, "w", encoding="utf-8") as f:
+                    f.write(vbs_content)
+            except Exception as e:
+                print(f"Error enabling startup: {e}")
+        else:
+            if vbs_path.exists():
+                try:
+                    os.remove(vbs_path)
+                except Exception as e:
+                    print(f"Error disabling startup: {e}")
+        
+        self.root.after(0, self.update_menu)
 
     def run(self):
         # Start pystray in a separate thread
