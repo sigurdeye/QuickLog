@@ -1,4 +1,4 @@
-![QuickLog Banner](assets/banner.png)
+![QuickLog Banner](assets/QuickLog_logo_v2.jpg)
 
 # QuickLog
 
