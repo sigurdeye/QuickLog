@@ -211,8 +211,12 @@ class TaskDialog(tk.Toplevel):
                               justify="center")
         self.entry.pack(expand=True, fill="both", padx=20)
         
-        self.entry.bind("<FocusIn>", self._clear_placeholder)
+        self.entry.bind("<FocusIn>", self._handle_focus_in)
         self.after(200, self._add_placeholder)
+
+        # Focus state tracking
+        self.has_had_focus = False
+        self.launch_time = time.time()
 
         # Bindings
         self.bind("<Return>", lambda e: self.submit())
@@ -221,9 +225,10 @@ class TaskDialog(tk.Toplevel):
         
         # Debounced closure
         self.ready_to_close = False
-        self.after(2000, self._set_ready_and_start_monitor)
+        self.after(1500, self._set_ready_and_start_monitor)
         self.bind("<FocusOut>", self._on_focus_out)
         self.after(10, self._force_focus)
+        self.after(500, self._force_focus) # Retry focus once more
 
     def _show_context_menu(self, event):
         # Create a standard old-school gray menu
@@ -272,6 +277,12 @@ class TaskDialog(tk.Toplevel):
 
     def _check_focus_and_close(self):
         if not self.winfo_exists(): return
+        
+        # Don't auto-close for the first 5 seconds unless we've actually HAD focus at some point
+        # This prevents the window from closing immediately if focus-stealing is slow.
+        if not self.has_had_focus and (time.time() - self.launch_time < 5.0):
+            return
+
         try:
             import ctypes
             import os
@@ -279,6 +290,10 @@ class TaskDialog(tk.Toplevel):
             if foreground_hwnd == 0: return
             my_hwnd = self.winfo_id()
             if foreground_hwnd == my_hwnd: return
+            
+            # Use Tcl's focus check as well
+            if self.focus_get() is not None: return
+
             lp_pid = ctypes.c_ulong()
             ctypes.windll.user32.GetWindowThreadProcessId(foreground_hwnd, ctypes.byref(lp_pid))
             if lp_pid.value != os.getpid():
@@ -286,23 +301,35 @@ class TaskDialog(tk.Toplevel):
         except:
             if self.focus_get() is None: self.destroy()
 
+    def _handle_focus_in(self, event=None):
+        self.has_had_focus = True
+        self._clear_placeholder(event)
+
     def _force_focus(self):
+        self.deiconify()
+        self.lift()
         self.attributes("-topmost", True)
         self.focus_force()
-        self.lift()
         self.entry.focus_set()
+        
         try:
             import ctypes
             hwnd = self.winfo_id()
-            # Try to grab foreground focus twice with a small gap
-            for _ in range(2):
-                ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 67)
-                ctypes.windll.user32.ShowWindow(hwnd, 5)
-                ctypes.windll.user32.SetForegroundWindow(hwnd)
-                time.sleep(0.01)
+            
+            # The "Alt" trick to bypass SetForegroundWindow restrictions
+            # Simulate an Alt key press (0x12)
+            ctypes.windll.user32.keybd_event(0x12, 0, 0, 0) # Alt Down
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+            ctypes.windll.user32.keybd_event(0x12, 0, 2, 0) # Alt Up
+            
+            # Ensure window is shown and positioned top-most
+            ctypes.windll.user32.ShowWindow(hwnd, 5) # SW_SHOW
+            ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0040 | 0x0001 | 0x0002) # HWND_TOPMOST, NOSIZE, NOMOVE
         except: pass
+        
+        # Final focused sets
         self.after(50, lambda: self.entry.focus_set())
-        self.after(200, lambda: self.entry.focus_set())
+        self.after(150, lambda: self.entry.focus_set())
 
     def _clear_placeholder(self, event=None):
         if self.entry.get() == self.prompt:
