@@ -143,6 +143,7 @@ class TaskDialog(tk.Toplevel):
         self.callback = callback
         self.on_close = on_close
         self.prompt = prompt
+        self.is_password = is_password
         
         # Remove window decorations (title bar, borders)
         self.overrideredirect(True)
@@ -173,10 +174,11 @@ class TaskDialog(tk.Toplevel):
                               justify="center")
         self.entry.pack(expand=True, fill="both", padx=20)
         
-        # Placeholder/Prompt logic (Very subtle)
-        self.entry.insert(0, prompt)
-        self.entry.config(fg="#888888")
+        # Placeholder/Prompt logic (Improved to avoid flicker)
+        # We don't insert it immediately because we expect to gain focus.
+        # If focus fails or is lost, we'll add it then.
         self.entry.bind("<FocusIn>", self._clear_placeholder)
+        self.after(200, self._add_placeholder)
 
         # Bindings
         self.bind("<Return>", lambda e: self.submit())
@@ -279,10 +281,19 @@ class TaskDialog(tk.Toplevel):
         self.after(50, lambda: self.entry.focus_set())
         self.after(150, lambda: self.entry.focus_set())
 
-    def _clear_placeholder(self, event):
+    def _clear_placeholder(self, event=None):
         if self.entry.get() == self.prompt:
             self.entry.delete(0, tk.END)
             self.entry.config(fg="white")
+            if self.is_password:
+                self.entry.config(show="*")
+
+    def _add_placeholder(self, event=None):
+        if self.winfo_exists() and not self.entry.get() and self.focus_get() != self.entry:
+            self.entry.config(fg="#888888")
+            if self.is_password:
+                self.entry.config(show="") # Show prompt text unmasked
+            self.entry.insert(0, self.prompt)
 
     def destroy(self):
         if self.on_close:
