@@ -52,7 +52,7 @@ uv run pyinstaller QuickLog.spec --noconfirm
 ```
 
 ## Technical Info & Privacy (GDPR)
-**All text** written is processed and stored only in the student's own browser. No data is sent to any server.
+**All user input** is stored locally on your machine. No data is sent to any server.
 
 ## License
 MIT
