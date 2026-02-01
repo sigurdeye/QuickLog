@@ -138,9 +138,11 @@ class TodoManager:
 
 class TaskDialog(tk.Toplevel):
     """A frameless, minimalist floating input dialog."""
-    def __init__(self, parent, callback, title="New Item", prompt="...", is_password=False):
+    def __init__(self, parent, callback, on_close=None, title="New Item", prompt="...", is_password=False):
         super().__init__(parent)
         self.callback = callback
+        self.on_close = on_close
+        self.prompt = prompt
         
         # Remove window decorations (title bar, borders)
         self.overrideredirect(True)
@@ -180,47 +182,112 @@ class TaskDialog(tk.Toplevel):
         self.bind("<Return>", lambda e: self.submit())
         self.bind("<Escape>", lambda e: self.destroy())
         
-        # Debounced FocusOut to prevent accidental closure on creation
+        # Debounced closure to prevent accidental closure on creation
         self.ready_to_close = False
-        self.after(200, self._set_ready) # Reduced delay for better responsiveness
+        self.after(500, self._set_ready_and_start_monitor)
         self.bind("<FocusOut>", self._on_focus_out)
         
         # Initial focus and grab
         self.after(10, self._force_focus)
 
-    def _set_ready(self):
+    def _set_ready_and_start_monitor(self):
         self.ready_to_close = True
+        self._poll_focus()
 
     def _on_focus_out(self, event):
+        # We still use the event as a trigger, but with a "smart" check
         if self.ready_to_close:
-            # Check if the widget that lost focus is actually the Toplevel itself
-            # and if the new focus is not part of this window
+            self.after(100, self._check_focus_and_close)
+
+    def _poll_focus(self):
+        """Smart polling monitor for focus loss."""
+        if self.winfo_exists() and self.ready_to_close:
+            self._check_focus_and_close()
+            self.after(500, self._poll_focus)
+
+    def _check_focus_and_close(self):
+        """The 'smart' check: verifies if focus is truly outside our process."""
+        if not self.winfo_exists():
+            return
+            
+        try:
+            import ctypes
+            import os
+            # Get the HWND of the window that currently has focus
+            foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            
+            # If no window has focus, or it's us, we stay open
+            if foreground_hwnd == 0:
+                return
+                
+            # Get our own HWND
+            my_hwnd = self.winfo_id()
+            if foreground_hwnd == my_hwnd:
+                return
+                
+            # If it's not us, check if it's one of our own process's windows
+            # (e.g. if we had multiple dialogs or a root window visible)
+            lp_pid = ctypes.c_ulong()
+            ctypes.windll.user32.GetWindowThreadProcessId(foreground_hwnd, ctypes.byref(lp_pid))
+            
+            if lp_pid.value != os.getpid():
+                self.destroy()
+        except Exception:
+            # Fallback for unexpected errors
             if self.focus_get() is None:
                 self.destroy()
 
     def _force_focus(self):
         self.attributes("-topmost", True)
-        self.lift()
         self.focus_force()
+        self.lift()
         self.entry.focus_set()
         
         # Direct Windows API call to steal foreground focus
         try:
             import ctypes
             # Get the window handle (HWND)
-            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
-            # Force Windows to bring this handle to the foreground
+            hwnd = self.winfo_id()
+            
+            # SWP_NOSIZE (1) | SWP_NOMOVE (2) | SWP_SHOWWINDOW (64) = 67
+            # HWND_TOPMOST = -1
+            ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 67)
+            
+            # Try to bring to front using multiple methods
+            ctypes.windll.user32.ShowWindow(hwnd, 5) # SW_SHOW
             ctypes.windll.user32.SetForegroundWindow(hwnd)
-        except:
-            pass
+            ctypes.windll.user32.SetActiveWindow(hwnd)
+            
+            # Additional trick: attach to the foreground window thread
+            # to gain permission to SetForegroundWindow
+            curr_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+            fore_window = ctypes.windll.user32.GetForegroundWindow()
+            if fore_window != 0:
+                fore_thread = ctypes.windll.user32.GetWindowThreadProcessId(fore_window, None)
+                if curr_thread != fore_thread:
+                    ctypes.windll.user32.AttachThreadInput(fore_thread, curr_thread, True)
+                    ctypes.windll.user32.SetForegroundWindow(hwnd)
+                    ctypes.windll.user32.AttachThreadInput(fore_thread, curr_thread, False)
+            
+            # Final attempt to ensure focus lands on the Entry specifically
+            self.entry.focus_set()
+        except Exception as e:
+            print(f"Focus error: {e}")
 
+        # Repeated focus attempts for stubborn windows
         self.after(50, lambda: self.focus_force())
         self.after(50, lambda: self.entry.focus_set())
+        self.after(150, lambda: self.entry.focus_set())
 
     def _clear_placeholder(self, event):
-        if self.entry.get() in ["What needs to be done?", "Enter your note:", "Enter text:"]:
+        if self.entry.get() == self.prompt:
             self.entry.delete(0, tk.END)
             self.entry.config(fg="white")
+
+    def destroy(self):
+        if self.on_close:
+            self.on_close()
+        super().destroy()
 
     def submit(self):
         text = self.entry.get()
@@ -234,6 +301,7 @@ class TrayApp:
         self.manager = TodoManager()
         self.icon = None
         self.mode = "todo"  # "todo", "note", or "mark"
+        self.current_dialog = None
         
         # Create a hidden root window to handle the main event loop
         self.root = tk.Tk()
@@ -279,6 +347,15 @@ class TrayApp:
         self.update_menu()
 
     def add_item_ui(self):
+        # If a dialog already exists, just focus it and return
+        if self.current_dialog is not None:
+            try:
+                if self.current_dialog.winfo_exists():
+                    self.current_dialog.after(0, self.current_dialog._force_focus)
+                    return
+            except tk.TclError:
+                self.current_dialog = None
+
         if self.mode == "todo":
             title, prompt, is_pw = "New Task", "What needs to be done?", False
         elif self.mode == "note":
@@ -286,8 +363,11 @@ class TrayApp:
         else: # mark mode
             title, prompt, is_pw = "Add", "Enter text:", True
             
-        dialog = TaskDialog(self.root, self.on_item_added, title, prompt, is_pw)
-        dialog.focus_force()  # Initial attempt to grab focus immediately
+        def clear_current_dialog():
+            self.current_dialog = None
+
+        self.current_dialog = TaskDialog(self.root, self.on_item_added, on_close=clear_current_dialog, title=title, prompt=prompt, is_password=is_pw)
+        self.current_dialog.focus_force()  # Initial attempt to grab focus immediately
 
     def on_item_added(self, text):
         if self.mode == "todo":
