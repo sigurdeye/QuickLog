@@ -51,7 +51,7 @@ To create your own standalone executable:
 uv run pyinstaller QuickLog.spec --noconfirm
 ```
 
-## Technical Info & Privacy (GDPR)
+## Privacy (GDPR)
 **All user input** is stored locally on your machine. No data is sent to any server.
 
 ## License
