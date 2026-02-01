@@ -1,12 +1,12 @@
 # Quick Log
 
-Minimalist tray app for taking notes fast. Built for teachers who need to log things during class without anyone seeing.
+Minimalist tray app for taking notes fast. Built for teachers who need a discreet way to log behavior and marks during class.
 
 ## What it does
 Three modes you can cycle through:
 - **Todo**: Basic checkbox list. Icon is yellow when you have tasks, and turns green when all tasks are done.
 - **Notes**: Standard text notes for quick reminders.
-- **Stealth (Marks)**: This is the hidden mode. It uses password-style input so no one can see what you type. Logs are hidden in a submenu. Perfect for logging behavior marks while the projector is on.
+- **Marks (stealthed)**: This is the hidden mode. It uses password-style input so students can't see the text of what you are writing. Logs are also hidden in a submenu. Perfect for logging behavior marks while the projector is on.
 
 ## Controls
 - **Left click tray**: Toggle between modes.
