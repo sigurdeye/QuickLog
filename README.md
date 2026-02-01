@@ -32,3 +32,6 @@ Go to the releases page and download `QuickLog.exe`. This is the easiest way.
 To make it start when your computer turns on:
 - Run `setup_startup.bat` (it will create a shortcut in your windows startup folder).
 - Or just manually put a shortcut of the exe in `shell:startup`.
+
+## Known issues / Things to fix
+- **Focus Stealing**: The typing menu doesn't always steal focus automatically. This means you sometimes have to manually click the text field with your cursor before you can start typing.
