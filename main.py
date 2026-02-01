@@ -221,7 +221,7 @@ class TaskDialog(tk.Toplevel):
         
         # Debounced closure
         self.ready_to_close = False
-        self.after(500, self._set_ready_and_start_monitor)
+        self.after(2000, self._set_ready_and_start_monitor)
         self.bind("<FocusOut>", self._on_focus_out)
         self.after(10, self._force_focus)
 
@@ -294,11 +294,15 @@ class TaskDialog(tk.Toplevel):
         try:
             import ctypes
             hwnd = self.winfo_id()
-            ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 67)
-            ctypes.windll.user32.ShowWindow(hwnd, 5)
-            ctypes.windll.user32.SetForegroundWindow(hwnd)
+            # Try to grab foreground focus twice with a small gap
+            for _ in range(2):
+                ctypes.windll.user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 67)
+                ctypes.windll.user32.ShowWindow(hwnd, 5)
+                ctypes.windll.user32.SetForegroundWindow(hwnd)
+                time.sleep(0.01)
         except: pass
         self.after(50, lambda: self.entry.focus_set())
+        self.after(200, lambda: self.entry.focus_set())
 
     def _clear_placeholder(self, event=None):
         if self.entry.get() == self.prompt:
@@ -400,11 +404,11 @@ class TrayApp:
         is_pw = mode_settings.get("password", False)
 
         if self.mode == "todo":
-            title, prompt = "New Task", "What needs to be done?"
+            title, prompt = "New Task", "..."
         elif self.mode == "note":
-            title, prompt = "New Note", "Enter your note:"
+            title, prompt = "New Note", "..."
         else: # mark mode
-            title, prompt = "Add", "Enter text:"
+            title, prompt = "Add", "..."
             
         def clear_current_dialog():
             self.current_dialog = None
