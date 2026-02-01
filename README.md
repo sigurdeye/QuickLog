@@ -1,6 +1,8 @@
+![QuickLog Banner](assets/banner.png)
+
 # QuickLog
 
-A dead-simple, minimalist capture tool for your Windows system tray. QuickLog stays out of your way until you need to jot something down, log a thought, or track a quick task.
+A quick and simple tool that allows for hidden note-taking, todo-listing, and logging. Perfect for teachers who need to jot down notes fast and sometimes hidden from view.
 
 ## Features
 
