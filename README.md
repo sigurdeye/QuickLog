@@ -6,13 +6,11 @@ A quick and simple tool that allows for hidden note-taking, todo-listing, and lo
 
 ## Features
 
-- **Minimalist UI**: yeah
+- **Minimalist UI**: It's just a tray icon and a floating input bar.
 - **Three Modes**:
   - **Todo**: Quick task tracking.
   - **Note**: Fast text capture with one-click copy.
   - **Log (Mark)**: Timestamped entries for logging anything your day.
-- **Few Distraction**: It's just a tray icon and a floating input bar.
-- **Low customizability**: I'm not good at programming
 
 ## Hotkeys (Default)
 
@@ -24,7 +22,7 @@ A quick and simple tool that allows for hidden note-taking, todo-listing, and lo
 
 Right click the tray icon and click `settings` to configure stuff. Here you can:
 - Enable/Disable specific modes.
-- Toggle masked input mode for any mode to keep your inputs private (they turn into asterisks as you type). Great if you're connected to a projector.
+- Enable/disable hidden input (turns text into asterisks as you type). Great if you're connected to a projector.
 
 ## Installation & Setup
 
@@ -64,6 +62,7 @@ MIT
 
 ## Future Plans
 - Custom shortcut key support (configure your own bindings for opening the bar and cycling modes).
+- idk send me an email or something if uve got better ideas fam
 
 ---
 
